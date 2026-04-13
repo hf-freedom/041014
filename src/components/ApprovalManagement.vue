@@ -14,7 +14,10 @@
     <div v-else class="reservation-list">
       <div v-for="reservation in pendingReservations" :key="reservation.id" class="reservation-card">
         <div class="reservation-info">
-          <h3>{{ reservation.title }}</h3>
+          <div class="title-row">
+            <h3>{{ reservation.title }}</h3>
+            <span v-if="reservation.recurrenceId" class="recurrence-badge">周期预定</span>
+          </div>
           <p class="room-name">{{ getRoomName(reservation.roomId) }}</p>
           <p class="user-info">
             <span class="label">申请人：</span>
@@ -28,6 +31,18 @@
             <span class="label">申请时间：</span>
             <span class="value">{{ formatDateTime(reservation.createdAt) }}</span>
           </p>
+          
+          <div v-if="reservation.recurrenceId && reservation.isRecurrenceMaster && reservation.recurrenceRule" class="recurrence-detail">
+            <p class="recurrence-title">
+              <span class="label">周期规则：</span>
+              <span class="value">{{ getRecurrenceRuleText(reservation.recurrenceRule) }}</span>
+            </p>
+            <p class="recurrence-count">
+              <span class="label">预定次数：</span>
+              <span class="value">{{ getSeriesOccurrenceCount(reservation.recurrenceId) }} 次</span>
+            </p>
+          </div>
+          
           <span class="status-badge pending">待审批</span>
         </div>
         <div class="reservation-actions">
@@ -49,6 +64,9 @@
           <button class="modal-close" @click="closeRejectModal">×</button>
         </div>
         <div class="modal-body">
+          <div v-if="currentReservation?.recurrenceId && currentReservation?.isRecurrenceMaster" class="warning-box">
+            <p>⚠️ 这是一个周期性预定，驳回将取消整个系列的预定。</p>
+          </div>
           <div class="form-group">
             <label>驳回原因</label>
             <textarea 
@@ -71,7 +89,7 @@
 import { ref } from 'vue'
 import { useStore } from '../stores'
 import { storeToRefs } from 'pinia'
-import type { Reservation } from '../types'
+import type { Reservation, RecurrenceRule } from '../types'
 
 const store = useStore()
 const { pendingReservations, rooms, users } = storeToRefs(store)
@@ -79,6 +97,8 @@ const { pendingReservations, rooms, users } = storeToRefs(store)
 const showRejectModal = ref(false)
 const rejectReason = ref('')
 const currentReservation = ref<Reservation | null>(null)
+
+const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 
 const getRoomName = (roomId: string) => {
   return rooms.value.find(r => r.id === roomId)?.name || '未知会议室'
@@ -99,10 +119,56 @@ const formatDateTime = (isoString: string) => {
   })
 }
 
+const getRecurrenceRuleText = (rule: RecurrenceRule) => {
+  const typeMap: Record<string, string> = {
+    daily: '每日',
+    weekly: '每周',
+    monthly: '每月',
+    custom: '自定义间隔'
+  }
+  
+  let text = typeMap[rule.type] || rule.type
+  
+  if (rule.type === 'weekly' && rule.daysOfWeek && rule.daysOfWeek.length > 0) {
+    const days = rule.daysOfWeek.map(d => weekdays[d]).join('、')
+    text += ` (${days})`
+  }
+  
+  if (rule.type === 'custom') {
+    text += ` (${rule.interval}天)`
+  }
+  
+  if (rule.endDate) {
+    text += `，截止至 ${rule.endDate}`
+  } else if (rule.maxOccurrences) {
+    text += `，共${rule.maxOccurrences}次`
+  }
+  
+  return text
+}
+
+const getSeriesOccurrenceCount = (seriesId: string) => {
+  const series = store.getRecurrenceSeries(seriesId)
+  if (!series) return 0
+  return series.occurrences.length
+}
+
 const approve = (reservation: Reservation) => {
-  if (confirm(`确定要通过"${reservation.title}"的预定申请吗？`)) {
+  let message = `确定要通过"${reservation.title}"的预定申请吗？`
+  
+  if (reservation.recurrenceId && reservation.isRecurrenceMaster) {
+    const count = getSeriesOccurrenceCount(reservation.recurrenceId)
+    message = `确定要通过这个周期预定申请吗？\n\n会议：${reservation.title}\n共 ${count} 次预定\n\n通过后将自动批准该系列的所有预定。`
+  }
+  
+  if (confirm(message)) {
     store.approveReservation(reservation.id)
-    alert('已通过该预定申请')
+    
+    if (reservation.recurrenceId && reservation.isRecurrenceMaster) {
+      alert('已通过该周期预定系列的所有预定申请')
+    } else {
+      alert('已通过该预定申请')
+    }
   }
 }
 
@@ -121,8 +187,14 @@ const closeRejectModal = () => {
 const confirmReject = () => {
   if (currentReservation.value) {
     store.rejectReservation(currentReservation.value.id, rejectReason.value)
+    
+    if (currentReservation.value.recurrenceId && currentReservation.value.isRecurrenceMaster) {
+      alert('已驳回该周期预定系列的所有预定申请')
+    } else {
+      alert('已驳回该预定申请')
+    }
+    
     closeRejectModal()
-    alert('已驳回该预定申请')
   }
 }
 </script>
@@ -163,7 +235,7 @@ const confirmReject = () => {
 
 .reservation-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
   gap: 20px;
 }
 
@@ -175,10 +247,31 @@ const confirmReject = () => {
   border-left: 4px solid #e6a23c;
 }
 
+.title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .reservation-info h3 {
   font-size: 16px;
   color: #303133;
-  margin-bottom: 8px;
+  margin: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recurrence-badge {
+  font-size: 11px;
+  background: #ecf5ff;
+  color: #409eff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  flex-shrink: 0;
 }
 
 .reservation-info .room-name {
@@ -211,6 +304,32 @@ const confirmReject = () => {
 }
 
 .reservation-info .time {
+  color: #409eff;
+}
+
+.recurrence-detail {
+  background: #f5f7fa;
+  padding: 12px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  margin-top: 8px;
+}
+
+.recurrence-detail p {
+  font-size: 13px;
+  color: #606266;
+  margin-bottom: 4px;
+}
+
+.recurrence-detail p:last-child {
+  margin-bottom: 0;
+}
+
+.recurrence-detail .label {
+  color: #909399;
+}
+
+.recurrence-detail .value {
   color: #409eff;
 }
 
@@ -290,6 +409,20 @@ const confirmReject = () => {
   gap: 12px;
   padding: 16px 20px;
   border-top: 1px solid #eee;
+}
+
+.warning-box {
+  background: #fdf6ec;
+  border: 1px solid #e6a23c;
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.warning-box p {
+  color: #e6a23c;
+  font-size: 13px;
+  margin: 0;
 }
 
 .form-group {
