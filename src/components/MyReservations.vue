@@ -25,6 +25,13 @@
         已通过
       </button>
       <button 
+        :class="['filter-tab', { active: currentFilter === 'waiting' }]"
+        @click="currentFilter = 'waiting'"
+      >
+        候补中
+        <span v-if="myWaitlist.length > 0" class="badge">{{ myWaitlist.length }}</span>
+      </button>
+      <button 
         :class="['filter-tab', { active: currentFilter === 'rejected' }]"
         @click="currentFilter = 'rejected'"
       >
@@ -38,50 +45,106 @@
       </button>
     </div>
 
-    <div v-if="filteredReservations.length === 0" class="empty-state">
+    <!-- 候补列表 -->
+    <div v-if="currentFilter === 'waiting' || currentFilter === 'all'" v-show="myWaitlist.length > 0">
+      <h3 class="list-subtitle">候补队列</h3>
+      <div class="reservation-list">
+        <div 
+          v-for="entry in myWaitlist" 
+          :key="entry.id" 
+          class="reservation-card waiting"
+        >
+          <div class="reservation-info">
+            <h3>{{ entry.title }}</h3>
+            <p class="room-name">{{ getRoomName(entry.roomId) }}</p>
+            <p class="time-info">
+              <span class="date">{{ entry.date }}</span>
+              <span class="time">{{ entry.startTime }} - {{ entry.endTime }}</span>
+            </p>
+            <div class="status-row">
+              <span class="status-badge waiting">
+                候补中 · 第{{ entry.position }}位
+              </span>
+            </div>
+          </div>
+          <div class="reservation-actions">
+            <button 
+              class="btn btn-small btn-danger" 
+              @click="handleCancelWaitlist(entry)"
+            >
+              取消候补
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="filteredReservations.length === 0 && (currentFilter !== 'waiting' || myWaitlist.length === 0) && currentFilter !== 'all'" class="empty-state">
       <p>暂无预定记录</p>
     </div>
 
-    <div v-else class="reservation-list">
-      <div 
-        v-for="reservation in filteredReservations" 
-        :key="reservation.id" 
-        :class="['reservation-card', reservation.status]"
-      >
-        <div class="reservation-info">
-          <h3>{{ reservation.title }}</h3>
-          <p class="room-name">{{ getRoomName(reservation.roomId) }}</p>
-          <p class="time-info">
-            <span class="date">{{ reservation.date }}</span>
-            <span class="time">{{ reservation.startTime }} - {{ reservation.endTime }}</span>
-          </p>
-          <div class="status-row">
-            <span :class="['status-badge', reservation.status]">
-              {{ getStatusText(reservation.status) }}
-            </span>
-            <span v-if="isPast(reservation)" class="past-badge">已结束</span>
+    <div v-if="filteredReservations.length > 0" class="reservation-section">
+      <h3 class="list-subtitle" v-if="currentFilter === 'all'">预定记录</h3>
+      <div class="reservation-list">
+        <div 
+          v-for="reservation in filteredReservations" 
+          :key="reservation.id" 
+          :class="['reservation-card', reservation.status]"
+        >
+          <div class="reservation-info">
+            <h3>
+              {{ reservation.title }}
+              <span v-if="reservation.recurringId" class="recurring-badge" title="周期性预定">🔄</span>
+            </h3>
+            <p class="room-name">{{ getRoomName(reservation.roomId) }}</p>
+            <p class="time-info">
+              <span class="date">{{ reservation.date }}</span>
+              <span class="time">{{ reservation.startTime }} - {{ reservation.endTime }}</span>
+            </p>
+            <div class="status-row">
+              <span :class="['status-badge', reservation.status]">
+                {{ getStatusText(reservation.status) }}
+              </span>
+              <span v-if="isPast(reservation)" class="past-badge">已结束</span>
+            </div>
+            <p v-if="reservation.rejectReason" class="reject-reason">
+              驳回原因：{{ reservation.rejectReason }}
+            </p>
           </div>
-          <p v-if="reservation.rejectReason" class="reject-reason">
-            驳回原因：{{ reservation.rejectReason }}
-          </p>
-        </div>
-        <div class="reservation-actions">
-          <button 
-            v-if="reservation.status === 'pending' || reservation.status === 'approved'"
-            class="btn btn-small btn-danger" 
-            @click="handleCancel(reservation)"
-          >
-            取消预定
-          </button>
-          <span v-else-if="reservation.status === 'cancelled'" class="action-text">
-            已取消
-          </span>
-          <span v-else-if="reservation.status === 'rejected'" class="action-text">
-            已驳回
-          </span>
-          <span v-else class="action-text">
-            {{ reservation.status }}
-          </span>
+          <div class="reservation-actions">
+            <template v-if="reservation.status === 'pending' || reservation.status === 'approved'">
+              <button 
+                v-if="reservation.recurringId"
+                class="btn btn-small btn-danger" 
+                @click="handleCancelSingle(reservation)"
+              >
+                取消本次
+              </button>
+              <button 
+                v-if="reservation.recurringId"
+                class="btn btn-small" 
+                @click="handleCancelAll(reservation)"
+              >
+                取消全部
+              </button>
+              <button 
+                v-else
+                class="btn btn-small btn-danger" 
+                @click="handleCancel(reservation)"
+              >
+                取消预定
+              </button>
+            </template>
+            <span v-else-if="reservation.status === 'cancelled'" class="action-text">
+              已取消
+            </span>
+            <span v-else-if="reservation.status === 'rejected'" class="action-text">
+              已驳回
+            </span>
+            <span v-else class="action-text">
+              {{ reservation.status }}
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -92,20 +155,24 @@
 import { ref, computed } from 'vue'
 import { useStore } from '../stores'
 import { storeToRefs } from 'pinia'
-import type { Reservation, ReservationStatus } from '../types'
+import type { Reservation, ReservationStatus, WaitlistEntry } from '../types'
 
 const store = useStore()
 const { currentUser, rooms } = storeToRefs(store)
 
-const currentFilter = ref<ReservationStatus | 'all'>('all')
+const currentFilter = ref<ReservationStatus | 'all' | 'waiting'>('all')
 
 const myReservations = computed(() => {
   return store.getReservationsByUser(currentUser.value.id)
 })
 
+const myWaitlist = computed(() => {
+  return store.getWaitlistByUser(currentUser.value.id)
+})
+
 const filteredReservations = computed(() => {
-  if (currentFilter.value === 'all') {
-    return myReservations.value
+  if (currentFilter.value === 'all' || currentFilter.value === 'waiting') {
+    return myReservations.value.filter(r => r.status !== 'waiting')
   }
   return myReservations.value.filter(r => r.status === currentFilter.value)
 })
@@ -119,7 +186,8 @@ const getStatusText = (status: ReservationStatus) => {
     pending: '待审批',
     approved: '已通过',
     rejected: '已驳回',
-    cancelled: '已取消'
+    cancelled: '已取消',
+    waiting: '候补中'
   }
   return statusMap[status]
 }
@@ -149,6 +217,35 @@ const handleCancel = (reservation: Reservation) => {
   if (confirm(`确定要取消这个${statusText}的预定吗？\n\n会议：${reservation.title}\n时间：${reservation.date} ${reservation.startTime}-${reservation.endTime}`)) {
     store.cancelReservation(reservation.id)
     alert('预定已取消')
+  }
+}
+
+// 取消单个周期性预定
+const handleCancelSingle = (reservation: Reservation) => {
+  const statusText = reservation.status === 'pending' ? '待审批' : '已通过'
+  if (confirm(`确定要取消这次${statusText}的预定吗？（仅取消本次，其他周期性预定不受影响）\n\n会议：${reservation.title}\n时间：${reservation.date} ${reservation.startTime}-${reservation.endTime}`)) {
+    store.cancelSingleRecurringReservation(reservation.id)
+    alert('本次预定已取消')
+  }
+}
+
+// 取消全部周期性预定
+const handleCancelAll = (reservation: Reservation) => {
+  if (!reservation.recurringId) return
+  const series = store.getReservationsByRecurringId(reservation.recurringId)
+  const activeCount = series.filter(r => r.status === 'pending' || r.status === 'approved').length
+  
+  if (confirm(`确定要取消这个周期性预定的全部 ${activeCount} 个活动预定吗？\n\n会议：${reservation.title}`)) {
+    store.cancelAllRecurringReservations(reservation.recurringId)
+    alert('全部周期性预定已取消')
+  }
+}
+
+// 取消候补
+const handleCancelWaitlist = (entry: WaitlistEntry) => {
+  if (confirm(`确定要取消这个候补吗？\n\n会议：${entry.title}\n时间：${entry.date} ${entry.startTime}-${entry.endTime}`)) {
+    store.cancelWaitlistEntry(entry.id)
+    alert('候补已取消')
   }
 }
 </script>
@@ -356,5 +453,51 @@ const handleCancel = (reservation: Reservation) => {
 .btn-small {
   padding: 6px 12px;
   font-size: 13px;
+}
+
+.filter-tab .badge {
+  background: #f56c6c;
+  color: white;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 10px;
+  min-width: 18px;
+  text-align: center;
+  margin-left: 4px;
+}
+
+.list-subtitle {
+  font-size: 16px;
+  color: #303133;
+  margin: 20px 0 16px;
+}
+
+.reservation-section {
+  margin-top: 8px;
+}
+
+.reservation-card.waiting {
+  border-left-color: #409eff;
+  background: linear-gradient(to right, #ecf5ff, white);
+}
+
+.recurring-badge {
+  font-size: 16px;
+  margin-left: 8px;
+  cursor: help;
+}
+
+.status-badge.waiting {
+  background: #ecf5ff;
+  color: #409eff;
+}
+
+.reservation-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #eee;
 }
 </style>
