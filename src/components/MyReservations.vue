@@ -25,6 +25,12 @@
         已通过
       </button>
       <button 
+        :class="['filter-tab', { active: currentFilter === 'waiting' }]"
+        @click="currentFilter = 'waiting'"
+      >
+        候补中
+      </button>
+      <button 
         :class="['filter-tab', { active: currentFilter === 'rejected' }]"
         @click="currentFilter = 'rejected'"
       >
@@ -38,18 +44,62 @@
       </button>
     </div>
 
-    <div v-if="filteredReservations.length === 0" class="empty-state">
+    <div v-if="currentFilter === 'waiting' && myQueue.length === 0" class="empty-state">
+      <p>暂无候补排队记录</p>
+    </div>
+
+    <div v-else-if="currentFilter !== 'waiting' && filteredReservations.length === 0 && myQueue.length === 0" class="empty-state">
       <p>暂无预定记录</p>
     </div>
 
+    <div v-else-if="currentFilter !== 'waiting' && filteredReservations.length === 0 && currentFilter !== 'all'" class="empty-state">
+      <p>暂无{{ currentFilter === 'pending' ? '待审批' : currentFilter === 'approved' ? '已通过' : currentFilter === 'rejected' ? '已驳回' : '已取消' }}的预定</p>
+    </div>
+
     <div v-else class="reservation-list">
+      <!-- 候补排队列表 -->
       <div 
-        v-for="reservation in filteredReservations" 
+        v-if="currentFilter === 'waiting' || currentFilter === 'all'"
+        v-for="queue in currentFilter === 'waiting' ? myQueue : myQueue.slice(0, 3)" 
+        :key="queue.id" 
+        class="reservation-card waiting"
+      >
+        <div class="reservation-info">
+          <h3>{{ queue.title }}</h3>
+          <p class="room-name">{{ getRoomName(queue.roomId) }}</p>
+          <p class="time-info">
+            <span class="date">{{ queue.date }}</span>
+            <span class="time">{{ queue.startTime }} - {{ queue.endTime }}</span>
+          </p>
+          <div class="status-row">
+            <span class="status-badge waiting">
+              候补排队中
+            </span>
+            <span class="queue-position">排队位置：第 {{ queue.position }} 位</span>
+          </div>
+        </div>
+        <div class="reservation-actions">
+          <button 
+            class="btn btn-small btn-danger" 
+            @click="handleCancelQueue(queue)"
+          >
+            取消排队
+          </button>
+        </div>
+      </div>
+
+      <!-- 预定列表 -->
+      <div 
+        v-for="reservation in currentFilter === 'waiting' ? [] : filteredReservations" 
         :key="reservation.id" 
         :class="['reservation-card', reservation.status]"
       >
         <div class="reservation-info">
-          <h3>{{ reservation.title }}</h3>
+          <div class="title-row">
+            <h3>{{ reservation.title }}</h3>
+            <span v-if="reservation.isRecurring" class="recurring-badge">周期性</span>
+            <span v-if="reservation.isFromQueue" class="queue-badge">候补转正</span>
+          </div>
           <p class="room-name">{{ getRoomName(reservation.roomId) }}</p>
           <p class="time-info">
             <span class="date">{{ reservation.date }}</span>
@@ -66,8 +116,22 @@
           </p>
         </div>
         <div class="reservation-actions">
+          <template v-if="reservation.isRecurring && (reservation.status === 'pending' || reservation.status === 'approved')">
+            <button 
+              class="btn btn-small btn-warning" 
+              @click="handleCancelSingle(reservation)"
+            >
+              取消本次
+            </button>
+            <button 
+              class="btn btn-small btn-danger" 
+              @click="handleCancelGroup(reservation.recurringGroupId!)"
+            >
+              取消全部
+            </button>
+          </template>
           <button 
-            v-if="reservation.status === 'pending' || reservation.status === 'approved'"
+            v-else-if="reservation.status === 'pending' || reservation.status === 'approved'"
             class="btn btn-small btn-danger" 
             @click="handleCancel(reservation)"
           >
@@ -92,15 +156,19 @@
 import { ref, computed } from 'vue'
 import { useStore } from '../stores'
 import { storeToRefs } from 'pinia'
-import type { Reservation, ReservationStatus } from '../types'
+import type { Reservation, ReservationStatus, ReservationQueue } from '../types'
 
 const store = useStore()
 const { currentUser, rooms } = storeToRefs(store)
 
-const currentFilter = ref<ReservationStatus | 'all'>('all')
+const currentFilter = ref<ReservationStatus | 'all' | 'waiting'>('all')
 
 const myReservations = computed(() => {
   return store.getReservationsByUser(currentUser.value.id)
+})
+
+const myQueue = computed(() => {
+  return store.getQueueByUser(currentUser.value.id).filter(q => q.status === 'waiting')
 })
 
 const filteredReservations = computed(() => {
@@ -119,7 +187,8 @@ const getStatusText = (status: ReservationStatus) => {
     pending: '待审批',
     approved: '已通过',
     rejected: '已驳回',
-    cancelled: '已取消'
+    cancelled: '已取消',
+    waiting: '候补中'
   }
   return statusMap[status]
 }
@@ -149,6 +218,27 @@ const handleCancel = (reservation: Reservation) => {
   if (confirm(`确定要取消这个${statusText}的预定吗？\n\n会议：${reservation.title}\n时间：${reservation.date} ${reservation.startTime}-${reservation.endTime}`)) {
     store.cancelReservation(reservation.id)
     alert('预定已取消')
+  }
+}
+
+const handleCancelSingle = (reservation: Reservation) => {
+  if (confirm(`确定要取消这次周期性预定吗？（仅取消本次）\n\n会议：${reservation.title}\n时间：${reservation.date} ${reservation.startTime}-${reservation.endTime}`)) {
+    store.cancelRecurringInstance(reservation.id)
+    alert('本次预定已取消')
+  }
+}
+
+const handleCancelGroup = (groupId: string) => {
+  if (confirm('确定要取消整个周期性预定组吗？（取消所有相关预定）')) {
+    store.cancelRecurringGroup(groupId)
+    alert('周期性预定组已取消')
+  }
+}
+
+const handleCancelQueue = (queue: ReservationQueue) => {
+  if (confirm(`确定要取消这个候补排队吗？\n\n会议：${queue.title}\n时间：${queue.date} ${queue.startTime}-${queue.endTime}`)) {
+    store.cancelQueue(queue.id)
+    alert('候补排队已取消')
   }
 }
 </script>
@@ -296,6 +386,50 @@ const handleCancel = (reservation: Reservation) => {
   color: #909399;
 }
 
+.status-badge.waiting {
+  background: #f9f0ff;
+  color: #722ed1;
+}
+
+.reservation-card.waiting {
+  border-left-color: #722ed1;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.title-row h3 {
+  margin: 0;
+}
+
+.recurring-badge {
+  background: #e6f7ff;
+  color: #1890ff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.queue-badge {
+  background: #f6ffed;
+  color: #52c41a;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.queue-position {
+  font-size: 13px;
+  color: #722ed1;
+  background: #f9f0ff;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
 .past-badge {
   display: inline-block;
   padding: 4px 12px;
@@ -356,5 +490,17 @@ const handleCancel = (reservation: Reservation) => {
 .btn-small {
   padding: 6px 12px;
   font-size: 13px;
+}
+
+.btn-warning {
+  background: #e6a23c;
+  color: white;
+  border-color: #e6a23c;
+  margin-right: 8px;
+}
+
+.btn-warning:hover {
+  background: #ebb563;
+  border-color: #ebb563;
 }
 </style>

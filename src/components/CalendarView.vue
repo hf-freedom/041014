@@ -19,6 +19,11 @@
         <label>选择日期：</label>
         <input type="date" v-model="selectedDate" :min="minDate" />
       </div>
+      <div class="control-group">
+        <button class="btn btn-primary" @click="openRecurringModal">
+          周期性预定
+        </button>
+      </div>
     </div>
 
     <div v-if="currentRoom" class="calendar-container">
@@ -73,10 +78,14 @@
           <span>我的预定</span>
         </div>
         <div class="legend-item">
-          <span class="legend-color disabled"></span>
-          <span>非开放时间</span>
-        </div>
+        <span class="legend-color disabled"></span>
+        <span>非开放时间</span>
       </div>
+      <div class="legend-item">
+        <span class="legend-color waiting"></span>
+        <span>候补排队中</span>
+      </div>
+    </div>
     </div>
 
     <!-- 预定弹窗 -->
@@ -149,9 +158,128 @@
               {{ getStatusText(selectedReservation?.status) }}
             </span>
           </div>
+          <div v-if="selectedReservation?.isRecurring" class="detail-item">
+            <span class="detail-label">类型：</span>
+            <span class="recurring-badge">周期性预定</span>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn" @click="showDetailModal = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 排队弹窗 -->
+    <div v-if="showQueueModal" class="modal-overlay" @click.self="closeQueueModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>加入候补排队</h3>
+          <button class="modal-close" @click="closeQueueModal">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="queue-info">该时间段已被预定，您可以加入候补排队。当有人取消时，系统会自动为您分配。</p>
+          <div class="form-group">
+            <label>会议主题</label>
+            <input v-model="queueForm.title" type="text" placeholder="请输入会议主题" />
+          </div>
+          <div class="form-group">
+            <label>开始时间</label>
+            <input v-model="queueForm.startTime" type="text" disabled />
+          </div>
+          <div class="form-group">
+            <label>结束时间</label>
+            <input v-model="queueForm.endTime" type="text" disabled />
+          </div>
+          <p class="form-tip">
+            <span class="tip-icon">ℹ️</span>
+            当前排队人数：{{ currentQueueCount }}人
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" @click="closeQueueModal">取消</button>
+          <button class="btn btn-primary" @click="confirmQueue">确认排队</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 周期性预定弹窗 -->
+    <div v-if="showRecurringModal" class="modal-overlay" @click.self="closeRecurringModal">
+      <div class="modal" style="min-width: 450px">
+        <div class="modal-header">
+          <h3>周期性预定</h3>
+          <button class="modal-close" @click="closeRecurringModal">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>会议主题</label>
+            <input v-model="recurringForm.title" type="text" placeholder="请输入会议主题" />
+          </div>
+          <div class="form-group">
+            <label>开始日期</label>
+            <input type="date" v-model="recurringForm.startDate" :min="minDate" />
+          </div>
+          <div class="form-group">
+            <label>结束日期</label>
+            <input type="date" v-model="recurringForm.endDate" :min="recurringForm.startDate || minDate" />
+          </div>
+          <div class="form-group">
+            <label>开始时间</label>
+            <select v-model="recurringForm.startTime">
+              <option v-for="time in availableStartTimes" :key="time" :value="time">
+                {{ time }}
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>结束时间</label>
+            <select v-model="recurringForm.endTime">
+              <option v-for="time in availableEndTimesForRecurring" :key="time" :value="time">
+                {{ time }}
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>重复类型</label>
+            <select v-model="recurringForm.type">
+              <option value="daily">每天</option>
+              <option value="weekly">每周</option>
+              <option value="monthly">每月</option>
+              <option value="custom">自定义间隔</option>
+            </select>
+          </div>
+          <div v-if="recurringForm.type === 'weekly'" class="form-group">
+            <label>选择星期几</label>
+            <div class="weekday-selector">
+              <label v-for="(day, index) in weekDays" :key="index" class="weekday-checkbox">
+                <input type="checkbox" :value="index" v-model="recurringForm.weekDays" />
+                <span>{{ day }}</span>
+              </label>
+            </div>
+          </div>
+          <div v-if="recurringForm.type === 'custom'" class="form-group">
+            <label>间隔天数</label>
+            <input type="number" v-model.number="recurringForm.interval" min="1" max="30" />
+          </div>
+          <div v-if="recurringForm.type === 'weekly' && !recurringForm.weekDays?.length" class="form-group">
+            <label>间隔周数</label>
+            <input type="number" v-model.number="recurringForm.interval" min="1" max="4" />
+          </div>
+          <div v-if="recurringForm.type === 'monthly'" class="form-group">
+            <label>间隔月数</label>
+            <input type="number" v-model.number="recurringForm.interval" min="1" max="12" />
+          </div>
+          <p class="form-tip" v-if="!isAdmin">
+            <span class="tip-icon">ℹ️</span>
+            提交后需等待管理员审批
+          </p>
+          <p class="form-tip admin" v-else>
+            <span class="tip-icon">✓</span>
+            管理员预定自动通过
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" @click="closeRecurringModal">取消</button>
+          <button class="btn btn-primary" @click="confirmRecurring">确认预定</button>
         </div>
       </div>
     </div>
@@ -162,7 +290,7 @@
 import { ref, computed, watch } from 'vue'
 import { useStore } from '../stores'
 import { storeToRefs } from 'pinia'
-import type { Reservation, ReservationStatus } from '../types'
+import type { Reservation, ReservationStatus, RecurringType } from '../types'
 
 const store = useStore()
 const { availableRooms, currentUser, isAdmin, users } = storeToRefs(store)
@@ -171,6 +299,8 @@ const selectedRoomId = ref('')
 const selectedDate = ref(formatDate(new Date()))
 const showReserveModal = ref(false)
 const showDetailModal = ref(false)
+const showQueueModal = ref(false)
+const showRecurringModal = ref(false)
 const selectedReservation = ref<Reservation | null>(null)
 const clickStartTime = ref('')
 
@@ -179,6 +309,25 @@ const reserveForm = ref({
   startTime: '',
   endTime: '',
 })
+
+const queueForm = ref({
+  title: '',
+  startTime: '',
+  endTime: '',
+})
+
+const recurringForm = ref({
+  title: '',
+  startDate: formatDate(new Date()),
+  endDate: '',
+  startTime: '',
+  endTime: '',
+  type: 'weekly' as RecurringType,
+  interval: 1,
+  weekDays: [] as number[],
+})
+
+const weekDays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 
 const minDate = formatDate(new Date())
 
@@ -258,7 +407,7 @@ const availableEndTimes = computed(() => {
   const times: string[] = []
   const [startH, startM] = reserveForm.value.startTime.split(':').map(Number)
   const [endHour, endMin] = currentRoom.value.openTimeEnd.split(':').map(Number)
-  
+
   for (let h = startH; h <= endHour; h++) {
     const startMForHour = h === startH ? startM + 30 : 0
     for (let m = startMForHour; m < 60; m += 30) {
@@ -270,6 +419,30 @@ const availableEndTimes = computed(() => {
   return times
 })
 
+const availableEndTimesForRecurring = computed(() => {
+  if (!currentRoom.value || !recurringForm.value.startTime) return []
+  const times: string[] = []
+  const [startH, startM] = recurringForm.value.startTime.split(':').map(Number)
+  const [endHour, endMin] = currentRoom.value.openTimeEnd.split(':').map(Number)
+
+  for (let h = startH; h <= endHour; h++) {
+    const startMForHour = h === startH ? startM + 30 : 0
+    for (let m = startMForHour; m < 60; m += 30) {
+      if (h === endHour && m > endMin) break
+      const time = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`
+      times.push(time)
+    }
+  }
+  return times
+})
+
+const currentQueueCount = computed(() => {
+  if (!selectedRoomId.value || !selectedDate.value || !queueForm.value.startTime || !queueForm.value.endTime) return 0
+  return store.getQueueByRoomAndDate(selectedRoomId.value, selectedDate.value).filter(
+    q => q.startTime === queueForm.value.startTime && q.endTime === queueForm.value.endTime
+  ).length
+})
+
 const getUserName = (userId: string) => {
   return users.value.find(u => u.id === userId)?.name || '未知用户'
 }
@@ -279,17 +452,31 @@ const getStatusText = (status?: ReservationStatus) => {
     pending: '待审批',
     approved: '已通过',
     rejected: '已驳回',
-    cancelled: '已取消'
+    cancelled: '已取消',
+    waiting: '候补中'
   }
   return status ? statusMap[status] : ''
 }
 
 const handleSlotClick = (slot: { time: string; disabled: boolean; reservation: Reservation | null }) => {
   if (slot.disabled) return
-  
+
   if (slot.reservation) {
-    selectedReservation.value = slot.reservation
-    showDetailModal.value = true
+    // 如果点击的是自己的预定，显示详情；否则提供候补选项
+    if (slot.reservation.userId === currentUser.value.id) {
+      selectedReservation.value = slot.reservation
+      showDetailModal.value = true
+    } else {
+      // 时间段已被他人占用，提供排队选项
+      if (confirm(`该时间段已被 "${getUserName(slot.reservation.userId)}" 预定，是否加入候补排队？`)) {
+        queueForm.value = {
+          title: '',
+          startTime: slot.reservation.startTime,
+          endTime: slot.reservation.endTime,
+        }
+        showQueueModal.value = true
+      }
+    }
   } else {
     clickStartTime.value = slot.time
     reserveForm.value = {
@@ -299,6 +486,100 @@ const handleSlotClick = (slot: { time: string; disabled: boolean; reservation: R
     }
     showReserveModal.value = true
   }
+}
+
+const openRecurringModal = () => {
+  recurringForm.value = {
+    title: '',
+    startDate: selectedDate.value,
+    endDate: '',
+    startTime: availableStartTimes.value[0] || '',
+    endTime: '',
+    type: 'weekly',
+    interval: 1,
+    weekDays: [],
+  }
+  showRecurringModal.value = true
+}
+
+const closeRecurringModal = () => {
+  showRecurringModal.value = false
+}
+
+const confirmRecurring = () => {
+  if (!recurringForm.value.title.trim()) {
+    alert('请输入会议主题')
+    return
+  }
+  if (!recurringForm.value.startDate || !recurringForm.value.endDate) {
+    alert('请选择开始和结束日期')
+    return
+  }
+  if (!recurringForm.value.startTime || !recurringForm.value.endTime) {
+    alert('请选择时间')
+    return
+  }
+  if (recurringForm.value.endTime <= recurringForm.value.startTime) {
+    alert('结束时间必须晚于开始时间')
+    return
+  }
+  if (recurringForm.value.type === 'weekly' && recurringForm.value.weekDays.length === 0 && !recurringForm.value.interval) {
+    alert('请选择每周的哪几天或设置间隔周数')
+    return
+  }
+
+  const result = store.addRecurringReservation(
+    {
+      roomId: selectedRoomId.value,
+      userId: currentUser.value.id,
+      date: recurringForm.value.startDate,
+      startTime: recurringForm.value.startTime,
+      endTime: recurringForm.value.endTime,
+      title: recurringForm.value.title,
+    },
+    {
+      type: recurringForm.value.type,
+      interval: recurringForm.value.interval,
+      endDate: recurringForm.value.endDate,
+      weekDays: recurringForm.value.weekDays.length > 0 ? recurringForm.value.weekDays : undefined,
+    }
+  )
+
+  closeRecurringModal()
+
+  if (result.actualCreated > 0) {
+    if (isAdmin.value) {
+      alert(`周期性预定成功！共创建 ${result.actualCreated} 个预定（计划 ${result.totalPlanned} 个，${result.totalPlanned - result.actualCreated} 个因冲突被跳过）。`)
+    } else {
+      alert(`周期性预定申请已提交，共 ${result.actualCreated} 个预定等待审批。`)
+    }
+  } else {
+    alert('所选时间段全部已被预定，无法创建周期性预定。')
+  }
+}
+
+const closeQueueModal = () => {
+  showQueueModal.value = false
+  queueForm.value = { title: '', startTime: '', endTime: '' }
+}
+
+const confirmQueue = () => {
+  if (!queueForm.value.title.trim()) {
+    alert('请输入会议主题')
+    return
+  }
+
+  store.joinQueue({
+    roomId: selectedRoomId.value,
+    userId: currentUser.value.id,
+    date: selectedDate.value,
+    startTime: queueForm.value.startTime,
+    endTime: queueForm.value.endTime,
+    title: queueForm.value.title,
+  })
+
+  closeQueueModal()
+  alert('已成功加入候补排队！当有人取消时，系统会自动为您分配。')
 }
 
 const closeReserveModal = () => {
@@ -319,12 +600,21 @@ const confirmReserve = () => {
     alert('结束时间必须晚于开始时间')
     return
   }
-  
+
   if (store.checkTimeConflict(selectedRoomId.value, selectedDate.value, reserveForm.value.startTime, reserveForm.value.endTime)) {
-    alert('该时间段已被预定')
+    // 时间段已被占用，提供排队选项
+    if (confirm('该时间段已被预定，是否加入候补排队？')) {
+      queueForm.value = {
+        title: reserveForm.value.title,
+        startTime: reserveForm.value.startTime,
+        endTime: reserveForm.value.endTime,
+      }
+      showReserveModal.value = false
+      showQueueModal.value = true
+    }
     return
   }
-  
+
   store.addReservation({
     roomId: selectedRoomId.value,
     userId: currentUser.value.id,
@@ -333,9 +623,9 @@ const confirmReserve = () => {
     endTime: reserveForm.value.endTime,
     title: reserveForm.value.title,
   })
-  
+
   closeReserveModal()
-  
+
   if (isAdmin.value) {
     alert('预定成功！管理员预定已自动通过。')
   } else {
@@ -705,6 +995,56 @@ const confirmReserve = () => {
 
 .status-text.cancelled {
   color: #909399;
+}
+
+.status-text.waiting {
+  color: #9254de;
+}
+
+.recurring-badge {
+  background: #e6f7ff;
+  color: #1890ff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.queue-info {
+  background: #f6ffed;
+  border: 1px solid #b7eb8f;
+  padding: 12px;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  color: #52c41a;
+  font-size: 14px;
+}
+
+.weekday-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.weekday-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.weekday-checkbox input {
+  width: auto;
+}
+
+.legend-color.waiting {
+  background: #f9f0ff;
+  border-color: #d3adf7;
+}
+
+.time-slot.waiting {
+  background: #f9f0ff;
+  cursor: pointer;
 }
 
 /* 按钮样式 */
